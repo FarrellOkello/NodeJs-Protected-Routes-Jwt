@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>
+            login 
+        </title>
+    </head>
+        <body>
+            <h2>login</h2>
+         <form id="login-form">
+            <input type="text" id="username" autocomplete="off" placeholder="username"/>
+            <input type="password" id="password" autocomplete="off" placeholder="password"/>
+            <input type="submit" placeholder="Submit Form"/>
+            </form>
+            <script>
+                const form = document.getElementById("login-form");
+                form.addEventListener('submit', loginUser);
+
+                //send data as json 
+               async function loginUser(event){
+                    event.preventDefault()
+                    const username= document.getElementById('username').value;
+                    const password = document.getElementById('password').value;
+
+                  const result =  await fetch('/api/login',{
+                        method: 'POST',
+                        headers:{
+                            'Content-Type' : 'application/json'
+                        },
+                        body:JSON.stringify({
+                            username, password
+                            })
+                    }).then((res)=> res.json())
+                    .catch((error)=>{
+                        console.log(error);
+                    })
+                    if(result.status === 'OK'){
+                        console.log("Got the token", result.data);
+                        localStorage.setItem('token',result.data)
+                        alert("success ",result.data);
+                    }else{
+                        alert(result.error)
+                    }
+                }
+                </script> 
+            </script>
+        </body>
+</html>
