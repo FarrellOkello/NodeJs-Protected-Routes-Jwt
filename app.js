@@ -12,6 +12,7 @@ const { default: mongoose } = require("mongoose");
 const User = require("./models/user");
 const bodyParser = require('body-parser');
 const bycript = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const config = require('./config')
@@ -19,7 +20,12 @@ const tokenList = {}
 
 var app = Express();
 
-app.use(cors())
+const corsOptions = {
+    origin: 'http://localhost:3000',
+    credentials: true,            //access-control-allow-credentials:true
+    optionSuccessStatus: 200
+}
+app.use(cors(corsOptions));
 
 mongoose.connect("mongodb://admin:admin@127.0.0.1:27017/cashback?retryWrites=true&w=majority", {
     useNewUrlParser: true,
@@ -34,28 +40,70 @@ app.use(bodyParser.json());
 
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({
+        'message':
+            'Username and password are required.'
+    });
 
-    const user = await User.findOne({ username }).lean();
+    const foundUser = await User.findOne({ username: username }).exec();
+    // console.log(foundUser.roles);
+    if (!foundUser) return res.sendStatus(401); //Unauthorized 
+    // evaluate password 
+    const match = await bcrypt.compare(password, foundUser.password);
+    if (match) {
+        const roles = Object.values(foundUser?.roles).filter(Boolean);
+        // create JWTs
+        const accessToken = jwt.sign({ username: foundUser.username, password: foundUser.password }
+            , config.secret,
+            { expiresIn: '10s' }
+        );
+        const refreshToken = jwt.sign(
+            { "username": foundUser.username },
+            config.refreshTokenSecret,
+            { expiresIn: '1d' }
+        );
+        // Saving refreshToken with current user
+        foundUser.refreshToken = refreshToken;
+        const result = await foundUser.save();
 
-    if (!user) {
-        return res.json({ status: 'error', error: 'Invalid username here/ password' + user })
+        // Creates Secure Cookie with refresh token
+        res.cookie('jwt', refreshToken, { httpOnly: true, secure: true, sameSite: 'None', maxAge: 24 * 60 * 60 * 1000 });
+
+        // Send authorization roles and access token to user
+        res.json({ roles, accessToken });
+    } else {
+        res.sendStatus(401);
+    }
+})
+
+app.post('/api/register', async (req, res) => {
+    const { user, pwd } = req.body;
+    if (!user || !pwd) return res.status(400).json({ 'message': 'Username and password are required.' });
+
+    // check for duplicate usernames in the db
+    const duplicate = await User.findOne({ username: user }).exec();
+    if (duplicate) return res.sendStatus(409); //Conflict 
+
+    try {
+        //encrypt the password
+        const hashedPwd = await bcrypt.hash(pwd, 10);
+
+        //create and store the new user
+        const result = await User.create({
+            "username": user,
+            "password": hashedPwd
+        });
+
+        console.log(result);
+
+        res.status(201).json({ 'success': `New user ${user} created!` });
+    } catch (err) {
+        res.status(500).json({ 'message': err.message });
     }
 
-    if (await bycript.compare(password, user.password)) {
-        const token = jwt.sign({ username: user.username, password: user.password }, config.secret, { expiresIn: config.tokenLife });
-        const refreshToken = jwt.sign(user, config.refreshTokenSecret, { expiresIn: config.refreshTokenLife })
-        tokenList[refreshToken] = res;
-        return res.send({
-            status: 'Ok',
-            accessToken: token,
-            refreshToken: refreshToken
-        })
-    }
-    res.json({ status: 'error', error: 'Invalid username/ password' })
 })
 
 app.post('/token', (req, res) => {
-    // refresh the damn token
     const postData = req.body;
     // if refresh token exists
     if ((postData.refreshToken) && (postData.refreshToken in tokenList)) {
@@ -75,37 +123,6 @@ app.post('/token', (req, res) => {
     } else {
         res.status(404).send('Invalid request')
     }
-})
-
-app.post('/api/register', async (req, res) => {
-    const { username, password: plainTextPassword } = req.body;
-
-    if (!username || typeof username !== 'string') {
-        return res.json({ status: 'error', error: 'Invalid username' })
-    }
-
-    if (!plainTextPassword || typeof plainTextPassword !== 'string') {
-        return res.json({ status: 'error', error: 'Invalid username' })
-    }
-
-    if (plainTextPassword.length < 5) {
-        res.json({ status: 'error', status: 'password too small, should be atleast 6 characters long!' })
-    }
-
-    const password = await bycript.hash(plainTextPassword, 10);
-    try {
-        const response = await User.create({
-            username, password
-        })
-        console.log("Username successfully created!!");
-    } catch (error) {
-        if (error.code === 11000) {
-            return res.json({ error: 'error', error: 'Username already in use' })
-        }
-        console.log(error.message);
-        throw error
-    }
-    res.json({ status: 'ok' });
 })
 
 app.post('/api/change-password', async (req, res) => {
@@ -138,23 +155,6 @@ app.post('/api/change-password', async (req, res) => {
 })
 
 app.use('/', Express.static(path.join(__dirname, 'static')));
-
-//   app.get('/add-user',(req,res)=>{
-//     const user = new User({
-//         username: "keilo",
-//         password: "not-secure",
-//         firstname:"okello",
-//         status:"active",
-//         role: "normal-user"
-//     })
-//     user.save()
-//     .then((result)=> {
-//         res.send(result)
-//     })
-//     .catch((err)=>{
-//         console.log(err);
-//     })
-//   })
 
 app.use(require('./tokenChecker'))
 
